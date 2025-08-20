@@ -59,7 +59,7 @@ export default function BatchImageGenerator() {
   const [jsonFile, setJsonFile] = useState<File | null>(null);
   const [prompts, setPrompts] = useState<PromptData[]>([]);
   const [manualPrompts, setManualPrompts] = useState<string[]>([""]);
-  const [dimensions, setDimensions] = useState("768x768");
+  const [dimensions, setDimensions] = useState("768x432");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -297,7 +297,7 @@ export default function BatchImageGenerator() {
               <h1 className="text-3xl font-bold">Batch Image Generator</h1>
               <p className="text-muted-foreground">
                 Upload a JSON file with prompts or add them manually to generate
-                images using Together AI
+                images.
               </p>
             </div>
 
@@ -408,14 +408,14 @@ export default function BatchImageGenerator() {
                     </Select>
                   </div>
 
-                  <div className="space-y-2">
+                  {/* <div className="space-y-2">
                     <Label>Model Information</Label>
                     <div className="text-sm text-muted-foreground p-3 bg-muted rounded-md">
                       Using FLUX.1-schnell-Free model
                       <br />
                       Fast generation, high quality images
                     </div>
-                  </div>
+                  </div> */}
                 </div>
               </CardContent>
             </Card>
