@@ -59,7 +59,7 @@ export default function BatchImageGenerator() {
   const [jsonFile, setJsonFile] = useState<File | null>(null);
   const [prompts, setPrompts] = useState<PromptData[]>([]);
   const [manualPrompts, setManualPrompts] = useState<string[]>([""]);
-  const [dimensions, setDimensions] = useState("768x768");
+  const [dimensions, setDimensions] = useState("768x432");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
