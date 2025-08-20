@@ -1,9 +1,7 @@
 "use client";
 
 import type React from "react";
-
 import { useState, useRef } from "react";
-import { useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -22,7 +20,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -34,8 +31,25 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import Together from "together-ai";
+import { Spinner } from "@/components/ui/spinner";
 import ApiKeyModal from "@/components/ApiKeyModal";
+
+// Google Imagen API
+import { GoogleGenAI, PersonGeneration } from "@google/genai";
+
+const ASPECT_RATIO_OPTIONS = [
+  { label: "1:1 (Square)", value: "1:1" },
+  { label: "9:16 (Portrait)", value: "9:16" },
+  { label: "16:9 (Landscape)", value: "16:9" },
+  { label: "4:3", value: "4:3" },
+  { label: "3:4", value: "3:4" },
+];
+
+const SAMPLE_JSON = `[
+	"A futuristic data visualization hologram emerging from a tablet held by a businesswoman in a sleek, minimalist office, neon blue and purple light, cyberpunk aesthetic.",
+	"A top-down shot (flat lay) of a modern home office setup: laptop, notebook, smartphone, glasses, and a cup of coffee on a wooden desk, minimalist, clean aesthetic, natural light.",
+	"A diverse team in a high-tech control room with massive, futuristic screens displaying complex analytics, they are pointing and discussing, cinematic lighting."
+]`;
 
 interface PromptData {
   prompt: string;
@@ -48,18 +62,11 @@ interface GeneratedImage {
   index: number;
 }
 
-const DIMENSION_OPTIONS = [
-  { label: "768 × 768 (Square)", value: "768x768" },
-  { label: "768 × 432 (Landscape)", value: "768x432" },
-  { label: "432 × 768 (Portrait)", value: "432x768" },
-  { label: "1792 × 768 (Wide)", value: "1792x768" },
-];
-
-export default function BatchImageGenerator() {
+export default function ImagenBatchGenerator() {
   const [jsonFile, setJsonFile] = useState<File | null>(null);
   const [prompts, setPrompts] = useState<PromptData[]>([]);
   const [manualPrompts, setManualPrompts] = useState<string[]>([""]);
-  const [dimensions, setDimensions] = useState("768x432");
+  const [aspectRatio, setAspectRatio] = useState("16:9");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -69,29 +76,29 @@ export default function BatchImageGenerator() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // API key modal logic (for Gemini/Imagen)
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const handleApiKeySet = (key: string) => setApiKey(key);
+
+  // File upload and manual prompt logic (same as main page)
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
     if (file.type !== "application/json" && !file.name.endsWith(".json")) {
       setError("Please upload a JSON file");
       return;
     }
-
     setJsonFile(file);
     setError(null);
-
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const text = e.target?.result as string;
         const jsonData = JSON.parse(text);
-
         if (!Array.isArray(jsonData)) {
           setError("JSON file must contain an array of prompts");
           return;
         }
-
         const promptData: PromptData[] = jsonData.map((prompt, index) => ({
           prompt: String(prompt).trim(),
           index,
@@ -104,29 +111,23 @@ export default function BatchImageGenerator() {
     reader.readAsText(file);
   };
 
-  const addManualPrompt = () => {
-    setManualPrompts([...manualPrompts, ""]);
-  };
-
+  const addManualPrompt = () => setManualPrompts([...manualPrompts, ""]);
   const removeManualPrompt = (index: number) => {
     if (manualPrompts.length > 1) {
       setManualPrompts(manualPrompts.filter((_, i) => i !== index));
     }
   };
-
   const updateManualPrompt = (index: number, value: string) => {
     const updated = [...manualPrompts];
     updated[index] = value;
     setManualPrompts(updated);
   };
-
   const useManualPrompts = () => {
     const validPrompts = manualPrompts.filter((p) => p.trim());
     if (validPrompts.length === 0) {
       setError("Please add at least one prompt");
       return;
     }
-
     const promptData: PromptData[] = validPrompts.map((prompt, index) => ({
       prompt: prompt.trim(),
       index,
@@ -134,50 +135,39 @@ export default function BatchImageGenerator() {
     setPrompts(promptData);
     setError(null);
   };
-  // API key is set via modal and stored in localStorage (encrypted)
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  // Only instantiate Together if apiKey is present
-  const together = apiKey ? new Together({ apiKey }) : null;
 
-  // Show modal if no API key
-  const handleApiKeySet = (key: string) => setApiKey(key);
-
+  // Imagen API call
   const generateImage = async (
     prompt: string,
-    width: number,
-    height: number
+    aspectRatio: string
   ): Promise<string> => {
-    // Use Together SDK to generate image
-    try {
-      if (!together) throw new Error("API key is required");
-      const response = await together.images.create({
-        model: "black-forest-labs/FLUX.1-schnell-Free",
-        prompt,
-        steps: 4, // API only allows 1-4
-        n: 1, // Generate one image at a time
-        width,
-        height,
-        response_format: "base64", // Prefer base64 output
-      });
-      if (!response || !response.data || !response.data[0]) {
-        throw new Error("Invalid response from Together API");
-      }
-      // Patch: add b64_json as optional to both types for type safety
-      type ImageDataB64OrURL = {
-        b64_json?: string;
-        url?: string;
-        type: string;
-        index: number;
-      };
-      const imageData = response.data[0] as ImageDataB64OrURL;
-      if (imageData.b64_json) {
-        return imageData.b64_json;
-      } else {
-        throw new Error("No valid image data returned");
-      }
-    } catch (err: any) {
-      throw new Error(`Failed to generate image: ${err?.message || err}`);
+    if (!apiKey) throw new Error("API key is required");
+    // Map aspect ratio to Imagen API values
+    const aspectMap: Record<string, string> = {
+      "1:1": "1:1",
+      "9:16": "9:16",
+      "16:9": "16:9",
+      "4:3": "4:3",
+      "3:4": "3:4",
+    };
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateImages({
+      model: "imagen-3.0-generate-001",
+      prompt,
+      config: {
+        numberOfImages: 1,
+        outputMimeType: "image/jpeg",
+        aspectRatio: aspectMap[aspectRatio] || "16:9",
+      },
+    });
+
+    if (
+      !response?.generatedImages ||
+      !response.generatedImages[0]?.image?.imageBytes
+    ) {
+      throw new Error("No image data returned from Imagen API");
     }
+    return response.generatedImages[0].image.imageBytes; // base64 JPEG
   };
 
   const startProcessing = async () => {
@@ -187,13 +177,11 @@ export default function BatchImageGenerator() {
       );
       return;
     }
-
     setIsProcessing(true);
     setIsPaused(false);
     setError(null);
     abortControllerRef.current = new AbortController();
-
-    // Remove duplicate prompts (case-insensitive, trimmed)
+    // Remove duplicate prompts
     const seen = new Set<string>();
     const uniquePrompts = prompts.filter((p) => {
       const key = p.prompt.trim().toLowerCase();
@@ -202,44 +190,31 @@ export default function BatchImageGenerator() {
       return true;
     });
     setTotalToProcess(uniquePrompts.length);
-
-    const [width, height] = dimensions.split("x").map(Number);
-
     try {
       for (let i = currentIndex; i < uniquePrompts.length; i++) {
         if (isPaused || abortControllerRef.current?.signal.aborted) break;
-
-        setCurrentIndex(i + 1); // progress is 1-based for user feedback
-        setError(null); // Clear error for each new prompt
-
+        setCurrentIndex(i + 1);
+        setError(null);
         try {
-          setIsProcessing(true); // Ensure loading state is set for each image
+          setIsProcessing(true);
           const imageData = await generateImage(
             uniquePrompts[i].prompt,
-            width,
-            height
+            aspectRatio
           );
-
           const newImage: GeneratedImage = {
             prompt: uniquePrompts[i].prompt,
             imageData,
             index: i,
           };
-
           setGeneratedImages((prev) => [...prev, newImage]);
-
-          // Auto-download the image
           downloadImage(newImage);
         } catch (err) {
-          console.error(`Error generating image for prompt ${i}:`, err);
           setError(
             `Failed to generate image for prompt ${i + 1}: ${
               err instanceof Error ? err.message : "Unknown error"
             }`
           );
         }
-
-        // Wait 10 seconds between API calls
         await new Promise((resolve) => setTimeout(resolve, 10000));
       }
     } catch (err) {
@@ -248,7 +223,7 @@ export default function BatchImageGenerator() {
       }
     } finally {
       setIsProcessing(false);
-      setCurrentIndex(0); // Only reset after all done
+      setCurrentIndex(0);
       setTotalToProcess(0);
     }
   };
@@ -257,7 +232,6 @@ export default function BatchImageGenerator() {
     setIsPaused(true);
     abortControllerRef.current?.abort();
   };
-
   const resetProcessing = () => {
     setIsProcessing(false);
     setIsPaused(false);
@@ -266,41 +240,35 @@ export default function BatchImageGenerator() {
     setError(null);
     abortControllerRef.current?.abort();
   };
-
   const downloadImage = (image: GeneratedImage) => {
     const link = document.createElement("a");
-    link.href = `data:image/png;base64,${image.imageData}`;
-    link.download = `generated-image-${image.index + 1}.png`;
+    link.href = `data:image/jpeg;base64,${image.imageData}`;
+    link.download = `imagen-image-${image.index + 1}.jpeg`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
-
   const downloadAllImages = () => {
     generatedImages.forEach((image) => {
       downloadImage(image);
     });
   };
-
   const progress =
     totalToProcess > 0 ? (currentIndex / totalToProcess) * 100 : 0;
 
   return (
     <>
-      {/* Always render the API key modal. It will handle its own show/hide logic. */}
-      <ApiKeyModal onApiKeySet={handleApiKeySet} service="together" />
-      {/* Only render the main app UI if apiKey is set */}
+      <ApiKeyModal onApiKeySet={handleApiKeySet} service="imagen" />
       {apiKey && (
         <div className="min-h-screen bg-background p-6">
           <div className="max-w-4xl mx-auto space-y-6">
             <div className="text-center space-y-2">
-              <h1 className="text-3xl font-bold">Batch Image Generator</h1>
+              <h1 className="text-3xl font-bold">Imagen Batch Generator</h1>
               <p className="text-muted-foreground">
                 Upload a JSON file with prompts or add them manually to generate
-                images.
+                images using Google Imagen
               </p>
             </div>
-
             <Card>
               <CardHeader>
                 <CardTitle>Upload JSON File</CardTitle>
@@ -327,15 +295,21 @@ export default function BatchImageGenerator() {
                     Browse
                   </Button>
                 </div>
-
                 {jsonFile && (
                   <div className="text-sm text-muted-foreground">
                     Loaded: {jsonFile.name} ({prompts.length} prompts)
                   </div>
                 )}
+                <div className="mt-4">
+                  <Label className="text-sm font-medium">
+                    Sample JSON format:
+                  </Label>
+                  <pre className="mt-2 p-3 bg-muted rounded-md text-sm overflow-x-auto">
+                    {SAMPLE_JSON}
+                  </pre>
+                </div>
               </CardContent>
             </Card>
-
             <Card>
               <CardHeader>
                 <CardTitle>Manual Prompts</CardTitle>
@@ -382,7 +356,6 @@ export default function BatchImageGenerator() {
                 </Button>
               </CardContent>
             </Card>
-
             <Card>
               <CardHeader>
                 <CardTitle>Generation Settings</CardTitle>
@@ -393,13 +366,13 @@ export default function BatchImageGenerator() {
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="dimensions">Image Dimensions</Label>
-                    <Select value={dimensions} onValueChange={setDimensions}>
+                    <Label htmlFor="aspectRatio">Aspect Ratio</Label>
+                    <Select value={aspectRatio} onValueChange={setAspectRatio}>
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {DIMENSION_OPTIONS.map((option) => (
+                        {ASPECT_RATIO_OPTIONS.map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}
                           </SelectItem>
@@ -407,27 +380,23 @@ export default function BatchImageGenerator() {
                       </SelectContent>
                     </Select>
                   </div>
-
-                  {/* <div className="space-y-2">
+                  <div className="space-y-2">
                     <Label>Model Information</Label>
                     <div className="text-sm text-muted-foreground p-3 bg-muted rounded-md">
-                      Using FLUX.1-schnell-Free model
+                      Using Imagen 4.0 model
                       <br />
-                      Fast generation, high quality images
+                      High quality, photorealistic images
                     </div>
-                  </div> */}
+                  </div>
                 </div>
               </CardContent>
             </Card>
-
             <Card>
               <CardHeader>
                 <CardTitle>Processing</CardTitle>
                 <CardDescription>
                   {isProcessing
-                    ? `Processing prompt ${currentIndex + 1} of ${
-                        prompts.length
-                      }`
+                    ? `Processing prompt ${currentIndex} of ${totalToProcess}`
                     : `Ready to process ${prompts.length} prompts`}
                 </CardDescription>
               </CardHeader>
@@ -443,7 +412,6 @@ export default function BatchImageGenerator() {
                 {prompts.length > 0 && (
                   <Progress value={progress} className="w-full" />
                 )}
-
                 <div className="flex items-center gap-2">
                   {!isProcessing ? (
                     <Button
@@ -464,7 +432,6 @@ export default function BatchImageGenerator() {
                       Pause
                     </Button>
                   )}
-
                   <Button
                     onClick={resetProcessing}
                     variant="outline"
@@ -473,7 +440,6 @@ export default function BatchImageGenerator() {
                     <RotateCcw className="w-4 h-4" />
                     Reset
                   </Button>
-
                   {generatedImages.length > 0 && (
                     <Button
                       onClick={downloadAllImages}
@@ -485,7 +451,6 @@ export default function BatchImageGenerator() {
                     </Button>
                   )}
                 </div>
-
                 {error && (
                   <Alert variant="destructive">
                     <AlertDescription>{error}</AlertDescription>
@@ -493,7 +458,6 @@ export default function BatchImageGenerator() {
                 )}
               </CardContent>
             </Card>
-
             {generatedImages.length > 0 && (
               <Card>
                 <CardHeader>
@@ -507,7 +471,7 @@ export default function BatchImageGenerator() {
                     {generatedImages.map((image) => (
                       <div key={image.index} className="space-y-2">
                         <img
-                          src={`data:image/png;base64,${image.imageData}`}
+                          src={`data:image/jpeg;base64,${image.imageData}`}
                           alt={image.prompt}
                           className="w-full h-48 object-cover rounded-lg border"
                         />

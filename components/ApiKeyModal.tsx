@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 
 interface ApiKeyModalProps {
   onApiKeySet: (apiKey: string) => void;
+  service: "together" | "imagen";
 }
 
 // Simple XOR encryption for demo (not secure for real secrets)
@@ -22,20 +23,31 @@ const xorDecrypt = (data: string, key: string) => {
     .join("");
 };
 
-const STORAGE_KEY = "together_api_key_enc";
-const ENCRYPTION_KEY = "together-demo";
+const STORAGE_KEYS = {
+  together: "together_api_key_enc",
+  imagen: "imagen_api_key_enc",
+};
+const ENCRYPTION_KEYS = {
+  together: "together-demo",
+  imagen: "imagen-demo",
+};
 
-export default function ApiKeyModal({ onApiKeySet }: ApiKeyModalProps) {
+export default function ApiKeyModal({
+  onApiKeySet,
+  service,
+}: ApiKeyModalProps) {
   const [apiInput, setApiInput] = useState("");
   const [show, setShow] = useState(false);
 
   useEffect(() => {
-    // Always check for a valid API key on mount
-    const encrypted = localStorage.getItem(STORAGE_KEY);
+    // Always check for a valid API key on mount for the given service
+    const storageKey = STORAGE_KEYS[service];
+    const encryptionKey = ENCRYPTION_KEYS[service];
+    const encrypted = localStorage.getItem(storageKey);
     let valid = false;
     if (encrypted) {
       try {
-        const decrypted = xorDecrypt(encrypted, ENCRYPTION_KEY);
+        const decrypted = xorDecrypt(encrypted, encryptionKey);
         if (decrypted && decrypted.length > 10) {
           onApiKeySet(decrypted);
           valid = true;
@@ -45,13 +57,17 @@ export default function ApiKeyModal({ onApiKeySet }: ApiKeyModalProps) {
       }
     }
     setShow(!valid);
-  }, [onApiKeySet]);
+    // Only run on service change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onApiKeySet, service]);
 
   const handleApiKeySubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!apiInput.trim()) return;
-    const encrypted = xorEncrypt(apiInput.trim(), ENCRYPTION_KEY);
-    localStorage.setItem(STORAGE_KEY, encrypted);
+    const storageKey = STORAGE_KEYS[service];
+    const encryptionKey = ENCRYPTION_KEYS[service];
+    const encrypted = xorEncrypt(apiInput.trim(), encryptionKey);
+    localStorage.setItem(storageKey, encrypted);
     onApiKeySet(apiInput.trim());
     setShow(false);
   };
@@ -88,13 +104,19 @@ export default function ApiKeyModal({ onApiKeySet }: ApiKeyModalProps) {
         }}
       >
         <h2 style={{ fontWeight: 700, fontSize: 22 }}>
-          Enter Together API Key
+          {service === "together"
+            ? "Enter Together API Key"
+            : "Enter Imagen API Key"}
         </h2>
         <input
           type="password"
           value={apiInput}
           onChange={(e) => setApiInput(e.target.value)}
-          placeholder="Paste your Together API key"
+          placeholder={
+            service === "together"
+              ? "Paste your Together API key"
+              : "Paste your Imagen (Gemini) API key"
+          }
           style={{
             padding: 8,
             fontSize: 16,
@@ -128,9 +150,10 @@ export default function ApiKeyModal({ onApiKeySet }: ApiKeyModalProps) {
             textAlign: "center",
           }}
         >
-          Your API key is encrypted and stored locally.
+          Your {service === "together" ? "Together" : "Imagen (Gemini)"} API key
+          is encrypted and stored locally.
           <br />
-          You must enter it to use the app.
+          You must enter it to use this part of the app.
         </div>
       </form>
     </div>
